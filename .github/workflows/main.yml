@@ -34,37 +34,56 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   # Job to deploy Docker container to EC2 instance
+  # Job to deploy Docker container to EC2 instance
   deploy_to_ec2:
-    name: Deploy Docker Container to EC2
+    name: Deploy Docker container to EC2
     runs-on: ubuntu-latest
     needs: push_to_registry  # Ensure deployment happens after the image is pushed
     steps:
-      - name: Checkout repository again (if needed on EC2)
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Deploy to EC2 via SSH
+      - name: Setup SSH Key and Deploy
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}  # EC2 instance public IP or DNS
-          EC2_USER: ${{ secrets.EC2_USER }}  # EC2 username (e.g., 'ubuntu')
+          EC2_USER: ${{ secrets.EC2_USER }}  # EC2 username (e.g., 'ubuntu' for AWS)
           EC2_PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}  # SSH private key for EC2 access
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}  # Docker Hub username
         run: |
-          # Create a private key file from the secret stored in GitHub Actions
+          echo "Setting up private key for SSH access..."
           echo "$EC2_PRIVATE_KEY" > private_key.pem
-          chmod 600 private_key.pem  # Set correct permissions for the private key
+          chmod 600 private_key.pem  # Secure the key
 
-          # SSH to EC2 instance and deploy Docker container
+          echo "Connecting to EC2 and deploying container..."
           ssh -i private_key.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << 'EOF'
-            # Stop and remove the existing container (if running)
-            docker stop nodejs-container || true
-            docker rm nodejs-container || true
+            echo "Logging into EC2 instance..."
 
-            # Remove old image (optional, to free space)
-            docker rmi $DOCKER_USERNAME/node-js:latest || true
+            # Stop and remove the existing container if it exists
+            if [ "$(docker ps -aq -f name=nodejs-container)" ]; then
+              echo "Stopping and removing existing container..."
+              docker stop nodejs-container
+              docker rm nodejs-container
+            fi
 
-            # Pull the latest Docker image from Docker Hub
-            docker pull $DOCKER_USERNAME/node-js:latest  
+            # Remove old image to prevent conflicts
+            if [ "$(docker images -q $DOCKER_USERNAME/node-js:latest)" ]; then
+              echo "Removing old Docker image..."
+              docker rmi $DOCKER_USERNAME/node-js:latest
+            fi
 
-            # Run the Docker container (modify container name and options as needed)
-            docker run -d --name nodejs-container -p 80:80 $DOCKER_USERNAME/node-js:latest  # Run the container in detached mode
+            # Pull the latest image from Docker Hub
+            echo "Pulling the latest image..."
+            docker pull $DOCKER_USERNAME/node-js:latest
+
+            # Run the container
+            echo "Starting new container..."
+            docker run -d --name nodejs-container -p 80:80 $DOCKER_USERNAME/node-js:latest
+
+            # Verify the running container
+            echo "Deployment completed. Running containers:"
+            docker ps -a
           EOF
+
+      - name: Clean up SSH private key
+        run: rm -f private_key.pem  # Remove private key for security
+
